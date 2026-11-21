@@ -1,10 +1,23 @@
 # AMD-HALO-LED
 
-The RGB light bar of the AMD Ryzen AI Halo box (`RAH-001`) on a stock
-Ubuntu 26.04 kernel: a DKMS backport of the mainline `amd_halo_led` driver,
-and a small command-line tool to set the colour.
+**Make the RGB light bar on the AMD Ryzen AI Halo box (`RAH-001`,
+Ryzen AI Max+ 395) work on stock Ubuntu 26.04.**
 
-## Why
+## What this is
+
+Two things, both for the Halo box's front LED bar:
+
+1. **A kernel driver package.** The official `amd_halo_led` driver from
+   Linux 7.3, backported so it builds on Ubuntu 26.04's 7.0 kernel, and
+   packaged as a DKMS `.deb` you can install with `apt`.
+2. **A command-line tool, `halo-led`.** Sets the bar's colour and brightness,
+   turns it off and on, and can make the colour stick across reboots.
+
+This is not AMD software and is not needed on AMD's own Halo OS, whose kernel
+already includes the driver. It is for people who installed a stock Ubuntu
+on the box and found the LED bar could no longer be controlled.
+
+## Why it is needed
 
 The `amd_halo_led` driver was merged for Linux 7.3
 (`drivers/platform/x86/amd/amd_halo_led.c`). AMD's own Halo OS kernel carries
