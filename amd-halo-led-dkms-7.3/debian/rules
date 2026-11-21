@@ -1,0 +1,10 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+# Sources only: DKMS builds the module on the target at install time.
+override_dh_auto_build override_dh_auto_install override_dh_auto_test override_dh_auto_clean:
+
+override_dh_dkms:
+	dh_dkms -V 7.3

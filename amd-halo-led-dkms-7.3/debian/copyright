@@ -1,0 +1,12 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: amd_halo_led (Linux kernel)
+Source: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+
+Files: *
+Copyright: 2026 Advanced Micro Devices, Inc.
+License: GPL-2
+ This program is free software; you can redistribute it and/or modify it
+ under the terms of version 2 of the GNU General Public License as
+ published by the Free Software Foundation.
+ .
+ On Debian systems the full text is in /usr/share/common-licenses/GPL-2.

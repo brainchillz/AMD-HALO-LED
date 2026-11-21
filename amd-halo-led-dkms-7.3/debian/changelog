@@ -1,0 +1,10 @@
+amd-halo-led-dkms (7.3+halo1) resolute; urgency=medium
+
+  * amd_halo_led.c taken unmodified from Linux v7.3
+    (sha256 8b4e4a8e7de52c3285386aedbd45bd9120ab914243cc79bb3b83ae799cb75b29).
+  * compat.h: wrapper for the five-argument wmidev_invoke_method() of
+    kernels before 7.3 (checks the result size itself).
+  * Built and tested on Ubuntu 26.04, 7.0.0-44-generic, AMD Ryzen AI Halo
+    (RAH-001, BIOS 03.03).
+
+ -- Halo cluster local packages <root@localhost>  Sat, 21 Nov 2026 10:45:00 +0000

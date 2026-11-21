@@ -1,0 +1,9 @@
+PACKAGE_NAME="amd-halo-led"
+PACKAGE_VERSION="#MODULE_VERSION#"
+BUILT_MODULE_NAME[0]="amd_halo_led"
+DEST_MODULE_LOCATION[0]="/updates/dkms"
+MAKE[0]="make -C ${kernel_source_dir} M=${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/build modules"
+AUTOINSTALL="yes"
+# 7.0-7.2 only: older kernels lack the buffer-based WMI API, 7.3+ ship the driver.
+BUILD_EXCLUSIVE_KERNEL="^7\.[0-2]\."
+BUILD_EXCLUSIVE_CONFIG="CONFIG_ACPI_WMI CONFIG_LEDS_CLASS_MULTICOLOR"

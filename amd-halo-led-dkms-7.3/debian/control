@@ -1,0 +1,23 @@
+Source: amd-halo-led-dkms
+Section: kernel
+Priority: optional
+Maintainer: Halo cluster local packages <root@localhost>
+Build-Depends: debhelper-compat (= 13), dh-sequence-dkms
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/platform/x86/amd/amd_halo_led.c?h=v7.3
+
+Package: amd-halo-led-dkms
+Architecture: all
+Depends: ${misc:Depends}
+Description: AMD Halo Box RGB LED driver, backported from Linux 7.3 (DKMS)
+ The amd_halo_led WMI driver from Linux 7.3 (drivers/platform/x86/amd),
+ unmodified, built out of tree for kernels that have the buffer-based WMI
+ API but not the driver itself (7.0 to 7.2, e.g. Ubuntu 26.04's 7.0).
+ .
+ It exposes the light bar of the AMD Ryzen AI Halo box as
+ /sys/class/leds/amd_halo:multicolor:status (multi_intensity = "R G B",
+ each 0-100, and brightness 0-100).
+ .
+ Kernels from 7.3 on ship the driver; DKMS does not build this module for
+ them and the package can then be removed.

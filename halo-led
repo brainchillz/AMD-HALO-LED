@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+# halo-led — control the AMD Halo multicolor status LED.
+#
+# Writes sysfs directly when permitted, otherwise falls back to the Halo Center
+# REST API (which runs as the halo-lp user and does the write on our behalf).
+#
+# Channel intensities and brightness are all 0-100 (not 0-255).
+#
+# Driver quirk, measured on amd_halo_led / kernel 6.18.35: writing 0 to
+# brightness does NOT turn the LED off. The value bounces back to 100, and a
+# moment later the driver asynchronously zeroes multi_intensity, destroying the
+# colour. So brightness 0 is never written here — "off" is expressed as
+# intensity "0 0 0" (stable, verified), with the colour saved to STATE_FILE so
+# "on" can restore it.
+
+set -euo pipefail
+
+LED_DIR="/sys/class/leds/amd_halo:multicolor:status"
+LED_NAME="${LED_DIR##*/}"
+INTENSITY_FILE="$LED_DIR/multi_intensity"
+BRIGHTNESS_FILE="$LED_DIR/brightness"
+API="http://127.0.0.1:10000/api/led"
+STATE_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/halo-led.color"
+RULE_FILE="/etc/udev/rules.d/99-halo-led.rules"
+
+die() { echo "halo-led: $*" >&2; exit 1; }
+
+usage() {
+    cat <<'EOF'
+Usage: halo-led <command> [brightness]
+
+Commands:
+  status                    Show current colour and brightness
+  off                       Turn the LED off (remembers the colour)
+  on                        Turn the LED back on with the remembered colour
+  <colour> [brightness]     Set a named colour, optional brightness 1-100
+  rgb <R> <G> <B> [bright]  Set explicit intensities, each 0-100
+  persist                   Reapply the current colour on every boot (needs root)
+  unpersist                 Stop reapplying a colour at boot (needs root)
+
+Named colours:
+  red  green  blue  yellow  cyan  magenta  white  orange  purple
+
+Examples:
+  halo-led status
+  halo-led off
+  halo-led green
+  halo-led blue 40
+  halo-led rgb 100 30 0
+  halo-led rgb 0 100 0 25
+  halo-led green 60 && sudo halo-led persist
+
+Notes:
+  All values are 0-100, not 0-255.
+  Brightness must be 1-100; use 'off' rather than brightness 0 (see the
+  driver quirk described at the top of this script).
+  The LED does not survive a reboot on its own; 'persist' fixes that.
+EOF
+}
+
+# Named colour table: name -> "R G B"
+colour_of() {
+    case "$1" in
+        red)     echo "100 0 0"     ;;
+        green)   echo "0 100 0"     ;;
+        blue)    echo "0 0 100"     ;;
+        yellow)  echo "100 100 0"   ;;
+        cyan)    echo "0 100 100"   ;;
+        magenta) echo "100 0 100"   ;;
+        white)   echo "100 100 100" ;;
+        orange)  echo "100 40 0"    ;;
+        purple)  echo "50 0 100"    ;;
+        *)       return 1           ;;
+    esac
+}
+
+validate() {
+    for v in "$@"; do
+        [[ "$v" =~ ^[0-9]+$ ]] || die "'$v' is not a number (expected 0-100)"
+        (( v >= 0 && v <= 100 )) || die "'$v' out of range (expected 0-100)"
+    done
+}
+
+have_sysfs_write() { [[ -w "$INTENSITY_FILE" && -w "$BRIGHTNESS_FILE" ]]; }
+
+have_api() { curl -sf -m 3 "$API" >/dev/null 2>&1; }
+
+# Emit current state as "R G B BRIGHTNESS"
+read_state() {
+    if [[ -r "$INTENSITY_FILE" && -r "$BRIGHTNESS_FILE" ]]; then
+        local rgb bright
+        rgb=$(< "$INTENSITY_FILE")
+        bright=$(< "$BRIGHTNESS_FILE")
+        echo "$rgb $bright"
+    elif have_api; then
+        curl -sf -m 3 "$API" \
+            | sed -E 's/.*"R":([0-9]+),"G":([0-9]+),"B":([0-9]+).*"brightness":([0-9]+).*/\1 \2 \3 \4/'
+    else
+        die "cannot read LED: sysfs unreadable and API at $API not responding"
+    fi
+}
+
+save_colour() {
+    mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null || return 0
+    printf '%s' "$1" > "$STATE_FILE" 2>/dev/null || true
+}
+
+load_colour() {
+    if [[ -r "$STATE_FILE" ]]; then
+        local saved
+        saved=$(< "$STATE_FILE")
+        [[ "$saved" =~ ^[0-9]+\ [0-9]+\ [0-9]+$ ]] && { echo "$saved"; return 0; }
+    fi
+    echo "100 100 100"   # nothing remembered — fall back to white
+}
+
+apply() {
+    local r=$1 g=$2 b=$3 bright=$4
+    validate "$r" "$g" "$b" "$bright"
+
+    # Never write brightness 0: the driver bounces it to 100 and then zeroes
+    # the colour asynchronously. "off" goes through intensity 0 0 0 instead.
+    (( bright == 0 )) && die "brightness 0 corrupts this LED's state — use 'halo-led off' instead"
+
+    if have_sysfs_write; then
+        printf '%s %s %s' "$r" "$g" "$b" > "$INTENSITY_FILE"
+        printf '%s' "$bright" > "$BRIGHTNESS_FILE"
+    elif have_api; then
+        curl -sf -m 3 -X POST "$API" \
+            -H 'Content-Type: application/json' \
+            -d "{\"color\":{\"R\":$r,\"G\":$g,\"B\":$b},\"brightness\":$bright}" \
+            >/dev/null || die "API write failed"
+    else
+        die "no write path: need root (or halo-lp group) for sysfs, or halo-lp.service running for the API"
+    fi
+}
+
+show_status() {
+    read -r r g b bright <<< "$(read_state)"
+    local emitted="on"
+    (( r == 0 && g == 0 && b == 0 )) && emitted="off (all channels 0)"
+    echo "colour:     R=$r G=$g B=$b   (0-100 each)"
+    echo "brightness: $bright"
+    echo "state:      $emitted"
+}
+
+# sysfs LED state lives in kernel memory and is gone at every boot, so something
+# has to write the colour back. A udev rule is the lightest thing that can: udevd
+# already runs, and the rule fires on the LED's 'add' event when amd_halo_led
+# probes — no unit of our own to install, enable, or maintain.
+as_root() {
+    if (( EUID == 0 )); then
+        "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo "$@"
+    else
+        die "need root to write $RULE_FILE (no sudo found) — re-run as root"
+    fi
+}
+
+persist() {
+    read -r r g b bright <<< "$(read_state)"
+
+    # A rule writing brightness 0 would trip the driver bug on every boot.
+    (( bright == 0 )) && die "brightness reads 0 — set a brightness first, then persist"
+
+    as_root tee "$RULE_FILE" >/dev/null <<EOF
+# Written by 'halo-led persist'. Reapplies the LED colour when the amd_halo_led
+# driver creates the device at boot. Edit with 'halo-led persist' (re-snapshots
+# the current colour) or delete with 'halo-led unpersist'.
+ACTION=="add", SUBSYSTEM=="leds", KERNEL=="$LED_NAME", ATTR{multi_intensity}="$r $g $b", ATTR{brightness}="$bright"
+EOF
+    as_root udevadm control --reload
+
+    if (( r == 0 && g == 0 && b == 0 )); then
+        echo "persisted: LED off at boot"
+    else
+        echo "persisted: R=$r G=$g B=$b at brightness $bright will be reapplied at boot"
+    fi
+    echo "rule: $RULE_FILE"
+}
+
+unpersist() {
+    [[ -e "$RULE_FILE" ]] || { echo "nothing persisted ($RULE_FILE does not exist)"; return 0; }
+    as_root rm -f "$RULE_FILE"
+    as_root udevadm control --reload
+    echo "unpersisted: removed $RULE_FILE (LED reverts to the firmware default at boot)"
+}
+
+main() {
+    [[ $# -eq 0 ]] && { usage; exit 0; }
+
+    case "$1" in
+        -h|--help|help) usage; exit 0 ;;
+
+        status) show_status ;;
+
+        persist)   persist   ;;
+        unpersist) unpersist ;;
+
+        off)
+            read -r r g b bright <<< "$(read_state)"
+            # Remember the colour so 'on' can bring it back; skip if already off.
+            if (( r != 0 || g != 0 || b != 0 )); then
+                save_colour "$r $g $b"
+            fi
+            apply 0 0 0 "$bright"
+            echo "LED off (remembered R=$r G=$g B=$b)"
+            ;;
+
+        on)
+            read -r _ _ _ bright <<< "$(read_state)"
+            read -r r g b <<< "$(load_colour)"
+            apply "$r" "$g" "$b" "$bright"
+            echo "LED on: R=$r G=$g B=$b at brightness $bright"
+            ;;
+
+        rgb)
+            shift
+            [[ $# -ge 3 ]] || die "rgb needs three values: halo-led rgb <R> <G> <B> [brightness]"
+            local bright=${4:-100}
+            apply "$1" "$2" "$3" "$bright"
+            echo "LED set: R=$1 G=$2 B=$3 at brightness $bright"
+            ;;
+
+        *)
+            local rgb
+            rgb=$(colour_of "$1") || die "unknown colour '$1' (try: halo-led --help)"
+            local bright=${2:-100}
+            read -r r g b <<< "$rgb"
+            apply "$r" "$g" "$b" "$bright"
+            echo "LED set to $1: R=$r G=$g B=$b at brightness $bright"
+            ;;
+    esac
+}
+
+main "$@"
